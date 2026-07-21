@@ -869,7 +869,7 @@ const CALIDAD = {
     'Escenarios':0.85,    // Metodología no totalmente pública
     'Circuitos':0.90,     // IVR/CATI, buena muestra
     'Pulso Research':0.85,// Relativamente nueva
-    'Isasi Burdman':0.80, // Históricamente pro-oficialismo, grandes outliers
+    'Isasi Burdman':0.70, // Históricamente pro-oficialismo, grandes outliers
     'DC Consultores':0.75,// Consistentemente outlier pro-LLA, descuento alto
     // Nuevas consultoras marzo 2026
     'Arena Pública':0.65, // Firma nueva, sin track record validado, 1er estudio 2027; n=904 online
@@ -897,7 +897,7 @@ const SESGO = {
     'Escenarios':0.97,
     'Circuitos':1.03,
     'Pulso Research':0.98,
-    'Isasi Burdman':0.80, // revisado may-26: miss PBA 2025 -13pp; sesgo pro-LLA verificado
+    'Isasi Burdman':0.65, // revisado may-26: miss PBA 2025 -13pp; sesgo pro-LLA verificado
     'DC Consultores':0.82, // Outlier pro-LLA sistemático (+10-15pp)
     // Nuevas consultoras marzo 2026
     'Arena Pública':0.85,  // Sesgo conservador fuerte: LLA 50.8% vs media ~41% (+10pp) → corrección máxima
@@ -1306,6 +1306,11 @@ const encuestasRaw = [
     { fecha:'2026-06-10', consultora:'Trends', LLA:33.0, PJ:30.0, PRO:5.0, PU:3.0, FIT:6.0, OTROS:23.0, muestra:2000, tipo:'espacio', calidad:'A' },
     // Proyección · campo 1-7 jun · n=1.236 · iProfesional/El Cronista pub. ~24-jun · FP 37.2/LLA 35.9
     { fecha:'2026-06-04', consultora:'Proyección', LLA:35.9, PJ:37.2, PRO:5.7, PU:3.2, FIT:4.2, OTROS:13.8, muestra:1236, tipo:'espacio', calidad:'B' },
+
+    // Isasi-Burdman · campo 19-25 jun 2026 · n=1.950 · qpaso.ar/Perfil pub. ~29-jun
+    // LLA 40% / FP-PJ ~23% / FIT ~5% / PU ~4% / OTROS ~28%
+    // "Triunfo en primera vuelta" · "desaprobación bajó 2pp vs mayo"
+    { fecha:'2026-06-22', consultora:'Isasi-Burdman', LLA:40.0, PJ:23.0, PRO:0.0, PU:4.0, FIT:5.0, OTROS:28.0, muestra:1950, tipo:'espacio', calidad:'B' },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1434,6 +1439,13 @@ const aprobacionData = [
     { fecha:'2026-06-20', consultora:'Atlas Intel', pos:39.7, neg:58.2, n:5200 },
     // CB Global Data julio 2026 · Perfil pub. 13-jul · +0.9pp desde jun; leve recuperación
     { fecha:'2026-07-10', consultora:'CB Global Data', pos:39.5, neg:58.0, n:1500 },
+
+    // Isasi-Burdman junio 2026 · campo 19-25 jun · n=1.950 · pub. ~29-jun (Perfil/qpaso)
+    // "Desaprobación bajó 2pp vs mayo" (mayo: neg ~45%) → pos:46% neg:43%
+    { fecha:'2026-06-22', consultora:'Isasi-Burdman', pos:46.0, neg:43.0, n:1950 },
+    // Synopsis junio 2026 · El Cronista pub. 10-jul · "gestión buena": 33.2% / negativa: 58.2%
+    // (métrica "buena/muy buena" ≠ aprobación directa; escala más restrictiva)
+    { fecha:'2026-06-15', consultora:'Synopsis', pos:33.2, neg:58.2, n:1000 },
 ];
 
 // ── APROBACIÓN METER — bloque autónomo (no depende del RCP IIFE) ─────────────
@@ -1445,7 +1457,7 @@ const aprobacionData = [
         'Opina Argentina':1.00,'Management & Fit':1.00,'UdeSA':1.00,
         'DAlessio IROL':0.95,'Trends':0.95,'Analogías':0.95,
         'Pulso Research':0.90,'Hugo Haime':0.85,'Grupo de Opinion':0.80,'OK Media':0.75,
-        'Isasi-Burdman':0.85
+        'Isasi-Burdman':0.55   // jul-26: mismo criterio que IV; neg:43% vs consenso 55-65% es outlier extremo
     };
     const SES_M = { 'Giacobbe':0.97,'Trends':0.98,'Management & Fit':0.98 };
     const LAM_M = 0.008;
@@ -1787,6 +1799,7 @@ const chartFont = { family: "'DM Sans', sans-serif" };
     // Evaluar LOESS en cada fecha de encuesta
     const partidos = ['LLA','PJ','PRO','PU','FIT'];
     const loessLines = {};
+    const loessEndPts = {};   // estimación actual en FECHA_REF (marcador)
     partidos.forEach(field => {
         const pts = [];
         evalDates.forEach(x0 => {
@@ -1794,17 +1807,23 @@ const chartFont = { family: "'DM Sans', sans-serif" };
             if (y !== null) pts.push({ x: x0, y });
         });
         loessLines[field] = pts;
+        // Último punto = estimación actual hoy
+        const last = pts[pts.length - 1];
+        loessEndPts[field] = last ? [{ x: last.x, y: last.y }] : [];
     });
 
     // ── Scatter puntos individuales ──────────────────────────────────────────
-    // Radio proporcional al peso quíntuple
-    const maxPeso = Math.max(...sorted.map(e => e.peso));
+    // Cada poll = un punto; color sólido para recientes (últimos 90d), semitransparente para históricos
+    const hoy = FECHA_REF.getTime();
+    const DIAS_RECIENTE = 90 * 864e5;   // 90 días = "reciente"
     const scatterPts = {};
-    const scatterRadii = {};
+    const scatterPtsRecientes = {};
     partidos.forEach(field => {
-        const filtered = sorted.filter(e => e[field] != null && e[field] > 0);
-        scatterPts[field]  = filtered.map(e => ({ x: new Date(e.fecha).getTime(), y: e[field] }));
-        scatterRadii[field] = filtered.map(e => 2.5 + (e.peso / maxPeso) * 5.5);
+        const todos = sorted.filter(e => e[field] != null && e[field] > 0);
+        scatterPts[field]         = todos.filter(e => (hoy - new Date(e.fecha).getTime()) >= DIAS_RECIENTE)
+                                         .map(e => ({ x: new Date(e.fecha).getTime(), y: e[field] }));
+        scatterPtsRecientes[field] = todos.filter(e => (hoy - new Date(e.fecha).getTime()) < DIAS_RECIENTE)
+                                          .map(e => ({ x: new Date(e.fecha).getTime(), y: e[field], consultora: e.consultora }));
     });
 
     // ── Tooltip fecha ─────────────────────────────────────────────────────────
@@ -1827,23 +1846,35 @@ const chartFont = { family: "'DM Sans', sans-serif" };
         type: 'scatter',
         data: {
             datasets: [
-                // Scatter puntos individuales (fondo, bajo las curvas)
-                { label:'_sLLA', data: scatterPts['LLA'], backgroundColor: colors.LLA+'28', pointRadius: scatterRadii['LLA'], pointHoverRadius:6, showLine:false, order:5 },
-                { label:'_sPJ',  data: scatterPts['PJ'],  backgroundColor: colors.PJ+'28',  pointRadius: scatterRadii['PJ'],  pointHoverRadius:6, showLine:false, order:5 },
-                { label:'_sPRO', data: scatterPts['PRO'], backgroundColor: colors.PRO+'22', pointRadius: scatterRadii['PRO'], pointHoverRadius:5, showLine:false, order:5 },
-                { label:'_sFIT', data: scatterPts['FIT'], backgroundColor: colors.FIT+'22', pointRadius: scatterRadii['FIT'], pointHoverRadius:5, showLine:false, order:5 },
-                // Curvas LOESS (encima del scatter)
+                // ── Encuestas históricas (>90d) — puntos pequeños semitransparentes
+                { label:'_sLLA', data: scatterPts['LLA'], backgroundColor: colors.LLA+'25', pointRadius: 3, pointHoverRadius:0, showLine:false, order:6 },
+                { label:'_sPJ',  data: scatterPts['PJ'],  backgroundColor: colors.PJ+'25',  pointRadius: 3, pointHoverRadius:0, showLine:false, order:6 },
+                { label:'_sPRO', data: scatterPts['PRO'], backgroundColor: colors.PRO+'20', pointRadius: 2, pointHoverRadius:0, showLine:false, order:6 },
+                { label:'_sFIT', data: scatterPts['FIT'], backgroundColor: colors.FIT+'20', pointRadius: 2, pointHoverRadius:0, showLine:false, order:6 },
+                // ── Encuestas recientes (<90d) — puntos grandes y sólidos con borde
+                { label:'_rLLA', data: scatterPtsRecientes['LLA'], backgroundColor: colors.LLA+'55', borderColor:'transparent', borderWidth:0, pointRadius: 4, pointHoverRadius:0, showLine:false, order:4 },
+                { label:'_rPJ',  data: scatterPtsRecientes['PJ'],  backgroundColor: colors.PJ+'55',  borderColor:'transparent', borderWidth:0, pointRadius: 4, pointHoverRadius:0, showLine:false, order:4 },
+                { label:'_rPRO', data: scatterPtsRecientes['PRO'], backgroundColor: colors.PRO+'55', borderColor:'transparent', borderWidth:0, pointRadius: 3.5, pointHoverRadius:0, showLine:false, order:4 },
+                { label:'_rFIT', data: scatterPtsRecientes['FIT'], backgroundColor: colors.FIT+'55', borderColor:'transparent', borderWidth:0, pointRadius: 3.5, pointHoverRadius:0, showLine:false, order:4 },
+                { label:'_rPU',  data: scatterPtsRecientes['PU'],  backgroundColor: colors.PU+'55',  borderColor:'transparent', borderWidth:0, pointRadius: 3.5, pointHoverRadius:0, showLine:false, order:4 },
+                // ── Curvas LOESS (encima del scatter)
                 { label:'La Libertad Avanza', data: loessLines['LLA'], borderColor: colors.LLA, backgroundColor:'transparent', type:'line', showLine:true, pointRadius:0, pointHoverRadius:5, borderWidth:3.0, tension:0.4, order:1 },
                 { label:'Peronismo / FP',      data: loessLines['PJ'],  borderColor: colors.PJ,  backgroundColor:'transparent', type:'line', showLine:true, pointRadius:0, pointHoverRadius:5, borderWidth:3.0, tension:0.4, order:1 },
                 { label:'PRO / Juntos',        data: loessLines['PRO'], borderColor: colors.PRO, backgroundColor:'transparent', type:'line', showLine:true, pointRadius:0, pointHoverRadius:4, borderWidth:2.0, tension:0.4, borderDash:[5,4], order:1 },
                 { label:'Frente de Izquierda', data: loessLines['FIT'], borderColor: colors.FIT, backgroundColor:'transparent', type:'line', showLine:true, pointRadius:0, pointHoverRadius:4, borderWidth:1.8, tension:0.4, borderDash:[3,4], order:1 },
                 { label:'Provincias Unidas',   data: loessLines['PU'],  borderColor: colors.PU,  backgroundColor:'transparent', type:'line', showLine:true, pointRadius:0, pointHoverRadius:4, borderWidth:1.6, tension:0.4, borderDash:[2,4], order:1 },
+                // ── Marcadores de estimación actual en FECHA_REF ──
+                { label:'_eLLA', data: loessEndPts['LLA'], backgroundColor: colors.LLA, borderColor:'#fff', borderWidth:2, pointRadius:7, pointHoverRadius:7, showLine:false, order:0, events:[] },
+                { label:'_ePJ',  data: loessEndPts['PJ'],  backgroundColor: colors.PJ,  borderColor:'#fff', borderWidth:2, pointRadius:7, pointHoverRadius:7, showLine:false, order:0, events:[] },
+                { label:'_ePRO', data: loessEndPts['PRO'], backgroundColor: colors.PRO, borderColor:'#fff', borderWidth:2, pointRadius:5, pointHoverRadius:7, showLine:false, order:0 },
+                { label:'_eFIT', data: loessEndPts['FIT'], backgroundColor: colors.FIT, borderColor:'#fff', borderWidth:2, pointRadius:5, pointHoverRadius:7, showLine:false, order:0 },
+                { label:'_ePU',  data: loessEndPts['PU'],  backgroundColor: colors.PU,  borderColor:'#fff', borderWidth:2, pointRadius:5, pointHoverRadius:5, showLine:false, order:0, events:[] },
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            interaction: { mode: 'nearest', intersect: false, axis:'x' },
+            interaction: { mode: 'index', intersect: false, axis:'x' },
             plugins: {
                 legend: {
                     position: 'top',
@@ -1856,23 +1887,36 @@ const chartFont = { family: "'DM Sans', sans-serif" };
                 tooltip: {
                     filter: item => !item.dataset.label.startsWith('_'),
                     callbacks: {
-                        title: ctx => ctx.length ? fmtMs(ctx[0].parsed.x) : '',
+                        title: ctx => {
+                            if (!ctx.length) return '';
+                            // Buscar el primer item que sea curva LOESS (sin prefijo _)
+                            const loessItem = ctx.find(c => !c.dataset.label.startsWith('_'));
+                            const ms = loessItem ? loessItem.parsed.x : ctx[0].parsed.x;
+                            if (!ms) return '';
+                            const d = new Date(+ms);
+                            const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+                            return meses[d.getMonth()] + ' ' + d.getFullYear();
+                        },
                         label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(1) + '%'
                     }
                 }
             },
             scales: {
                 x: {
-                    type: 'linear',
+                    type: 'time',
+                    time: {
+                        unit: 'month',
+                        displayFormats: { month: 'MMM yy' },
+                        tooltipFormat: 'MMM yyyy'
+                    },
                     min: xMin, max: xMax,
                     grid: { display: false },
                     ticks: {
                         color: '#8896AB',
                         font: { size: 9, family: chartFont.family },
                         maxRotation: 45,
-                        autoSkip: true,
-                        maxTicksLimit: 16,
-                        callback: v => fmtMs(v)
+                        maxTicksLimit: 20,
+                        autoSkip: false
                     }
                 },
                 y: {
